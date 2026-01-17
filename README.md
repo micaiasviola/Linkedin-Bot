@@ -78,8 +78,8 @@ Para evitar ver a mesma vaga duas vezes, o sistema mantém um arquivo `historico
 #### 1. Clone o repositório:
 
 ```bash
-git clone https://github.com/seu-usuario/linkedin-easy-apply-hunter.git
-cd linkedin-easy-apply-hunter
+git clone https://github.com/micaiasviola/Linkedin-Bot
+cd Linkedin-Bot
 ```
 
 #### 2. Instale as dependências:
