@@ -1,51 +1,36 @@
 import os
-import time
-import shutil
-from playwright.sync_api import sync_playwright
+import asyncio
+from playwright.async_api import async_playwright
 
-# Define o caminho da pasta
-USER_DATA_DIR = os.path.join(os.getcwd(), "navegador_robo")
+# Usa o mesmo caminho absoluto do hunter.py
+USER_DATA_DIR = os.path.abspath(os.path.join(os.getcwd(), "navegador_robo"))
 
-def fazer_login():
-    # Garante que a pasta antiga foi removida para evitar conflitos
-    if os.path.exists(USER_DATA_DIR):
-        try:
-            shutil.rmtree(USER_DATA_DIR)
-            print("🧹 Pasta antiga limpa com sucesso.")
-        except:
-            print("⚠️ Não consegui apagar a pasta automaticamente. Se der erro, apague 'navegador_robo' manualmente.")
-
-    print("🚀 Abrindo Navegador Genérico para Login...")
-    print("1. Digite seu email e senha.")
-    print("2. IMPORTANTE: Marque a caixa 'Lembrar de mim'.")
-    print("3. Espere carregar o feed e FECHE a janela.")
-
-    with sync_playwright() as p:
-        # Abre sem apontar para executable_path (usa o interno do Playwright)
-        browser = p.chromium.launch_persistent_context(
+async def realizar_login():
+    print(f"📂 Pasta de perfil: {USER_DATA_DIR}")
+    print("🚀 Abrindo navegador para login manual...")
+    
+    async with async_playwright() as p:
+        # Abre contexto PERSISTENTE
+        context = await p.chromium.launch_persistent_context(
             user_data_dir=USER_DATA_DIR,
             headless=False,
-            args=["--start-maximized", "--no-sandbox", "--disable-infobars"]
+            channel="chrome", # Tenta usar o Chrome real
+            args=["--start-maximized"]
         )
         
-        page = browser.pages[0]
-        try:
-            page.goto("https://www.linkedin.com/login", timeout=60000)
-        except:
-            pass
+        page = context.pages[0]
+        await page.goto("https://www.linkedin.com/login")
         
-        # Mantém aberto até você fechar
-        print("⏳ Aguardando você fechar o navegador...")
-        try:
-            while True:
-                time.sleep(1)
-                # Se não houver mais páginas abertas, sai do loop
-                if not browser.pages:
-                    break
-        except:
-            pass
-            
-        print("✅ Novo perfil salvo em 'navegador_robo'!")
+        print("\n⚠️  AÇÃO NECESSÁRIA:")
+        print("1. Faça login no LinkedIn manualmente no navegador que abriu.")
+        print("2. Espere carregar o feed de notícias.")
+        print("3. Quando terminar, APERTE ENTER AQUI NO TERMINAL para salvar e fechar.")
+        
+        input() # Espera você dar Enter
+        
+        print("💾 Salvando cookies e fechando...")
+        await context.close()
+        print("✅ Login salvo com sucesso!")
 
 if __name__ == "__main__":
-    fazer_login()
+    asyncio.run(realizar_login())
