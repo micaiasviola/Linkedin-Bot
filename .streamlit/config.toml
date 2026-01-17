@@ -1,0 +1,9 @@
+[theme]
+primaryColor = "#00B4D8"  # Um azul ciano moderno (tech)
+backgroundColor = "#0E1117" # Fundo escuro profissional
+secondaryBackgroundColor = "#262730" # Fundo da sidebar/inputs
+textColor = "#FAFAFA"
+font = "sans serif"
+
+[server]
+headless = true
