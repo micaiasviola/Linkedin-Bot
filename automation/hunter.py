@@ -247,7 +247,7 @@ async def _buscar_vagas_async(historico, termo_usuario, filtro_tempo, max_pagina
         # Manda sinal de fim pra UI não ficar travada
         await queue.put(None)
 
-# ================= PONTE SYNC -> ASYNC =================
+# ================= PONTE SYNC -> ASYNC (BLINDADA PARA WINDOWS) =================
 def buscar_vagas_em_lote(links_ja_vistos, termo, tempo, salvar, max_pg=10, ordenar_por_data=False):
     """
     Essa função é o wrapper pro Streamlit (que é síncrono) conseguir
@@ -258,9 +258,12 @@ def buscar_vagas_em_lote(links_ja_vistos, termo, tempo, salvar, max_pg=10, orden
     
     queue = asyncio.Queue()
     
-    # Gambiarra padrão pra pegar o loop no Windows/Streamlit
-    try: loop = asyncio.get_event_loop()
-    except RuntimeError: loop = asyncio.new_event_loop(); asyncio.set_event_loop(loop)
+    # Criação segura do loop
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
 
     # Dispara o robô em background
     task = loop.create_task(_buscar_vagas_async(historico, termo, tempo, max_pg, salvar, queue, ordenar_por_data))
@@ -268,13 +271,30 @@ def buscar_vagas_em_lote(links_ja_vistos, termo, tempo, salvar, max_pg=10, orden
     try:
         while True:
             # Fica ouvindo a fila. O run_until_complete faz a ponte sync.
-            dados = loop.run_until_complete(queue.get())
-            if dados is None: break
-            yield dados
+            # Adicionamos um timeout pequeno para permitir que o CTRL+C ou Stop do Streamlit sejam processados
+            try:
+                # Espera por dados na fila
+                dados = loop.run_until_complete(queue.get())
+                if dados is None: break
+                yield dados
+            except RuntimeError:
+                # Se o loop fechar inesperadamente
+                break
+
     except GeneratorExit:
         # Se o usuário clicar em PARAR no app.py, o loop quebra e cai aqui.
-        # A gente cancela a tarefa pra fechar o navegador imediatamente.
         log_terminal("Interrompendo tarefa assíncrona...", "WARN")
         task.cancel()
-        loop.run_until_complete(task)
+        
+        # --- BLINDAGEM CONTRA WINERROR 87 ---
+        try:
+            # Tenta esperar o cancelamento finalizar
+            # Suppress=True impede que erros de cancelamento subam
+            loop.run_until_complete(task)
+        except (asyncio.CancelledError, OSError, RuntimeError, Exception):
+            # No Windows com ProactorEventLoop, é comum dar erro ao fechar pipes
+            # de processos que já morreram. Podemos ignorar isso com segurança.
+            pass
+            
+        # Relança a exceção para o Python saber que o generator acabou corretamente
         raise
