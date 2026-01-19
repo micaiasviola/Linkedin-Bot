@@ -5,296 +5,277 @@ import time
 import urllib.parse
 import asyncio
 import datetime
-import random  # Import essencial para a "humanização" do bot (Jitter)
+import random
 from playwright.async_api import async_playwright
 
-# ================= CONFIGURAÇÕES GERAIS =================
-# Caminho absoluto pra garantir que funcione no Windows sem dor de cabeça
+# ================= CONFIGURAÇÕES =================
 USER_DATA_DIR = os.path.abspath(os.path.join(os.getcwd(), "navegador_robo"))
 CAMINHO_HISTORICO = os.path.join(os.getcwd(), "data", "historico_vagas.json")
-
 RESULTADOS_POR_PAGINA = 25
-MAX_PAGINAS_SEM_NOVIDADE = 2  # Se passar 2 páginas só com vaga velha, a gente para pra não perder tempo
+MAX_PAGINAS_SEM_NOVIDADE = 2
 
-# --- SISTEMA DE RANKING (A IA DO PENTE FINO) ---
-# Se tiver isso no título, ganha ponto
-KEYWORDS_POSITIVAS = [
-    "python", "django", "flask", "fastapi", "pandas", 
-    "junior", "júnior", "jr", "estagio", "estágio", "trainee", "entry level"
+KEYWORDS_POSITIVAS = ["python", "django", "flask", "fastapi", "pandas", "junior", "júnior", "jr", "estagio", "estágio", "trainee", "entry level", "desenvolvedor", "developer", "software"]
+KEYWORDS_NEGATIVAS = ["senior", "pleno", "sr", "lead", "tech lead"]
+
+# --- FILTRO 1: BLACKLIST DE PALAVRAS (Busca Geral) ---
+BLACKLIST_RE = re.compile(r"(senior|sênior|sr\.?|pleno|lead|tech lead|líder|principal|staff|head|manager|gerente|gestor|coordenador|expert|architect|arquiteto|\biii\b|\biv\b|\bv\b)", re.I)
+
+# --- FILTRO 2: BLACKLIST DE CARGOS IRRELEVANTES (O Pente Fino Real) ---
+# Se o título tiver qualquer uma dessas palavras, a vaga é descartada na hora.
+BLACKLIST_TITULOS_IRRELEVANTES = [
+    "vendas", "sales", "vendedor", "consultor", "executivo", "sdr", "closer", "comercial", # Vendas
+    "civil", "elétrica", "mecânica", "produção", "química", "ambiental", # Engenharias não-software
+    "sap", "erp", "totvs", "protheus", "winthor", # Sistemas específicos não-dev
+    "suporte", "support", "help desk", "service desk", # Suporte técnico
+    "recrutador", "recruiter", "rh", "talent", "human resources", # RH
+    "marketing", "design", "designer", "social media", "conteúdo", # Mkt
+    "administrativo", "assistente", "auxiliar", "recepcionista", # Adm
+    "comprador", "banco de talentos", "banco de currículos", "vaga afirmativa" # Outros
 ]
 
-# Se tiver isso, perde ponto (mas não é eliminado na hora)
-KEYWORDS_NEGATIVAS = [
-    "senior", "pleno" 
-]
-
-# --- O FILTRO "ANTI-SÊNIOR" ---
-# Regex parruda pra barrar vaga que pede Tech Lead pagando de Jr.
-BLACKLIST_RE = re.compile(
-    r"(senior|sênior|sr\.?|pleno|lead|tech lead|líder|principal|staff|head|manager|gerente|gestor|coordenador|expert|architect|arquiteto|\biii\b|\biv\b|\bv\b)",
-    re.I
-)
-
-# Pega o ID numérico da vaga na URL
 JOB_ID_RE = re.compile(r"/jobs/view/(\d+)")
 
-# ================= LOGGING (FICA BONITO NO TERMINAL) =================
 def log_terminal(msg, tipo="INFO"):
-    """
-    Funçãozinha pra colorir o terminal. Ajuda muito no debug visual
-    enquanto o Streamlit tá rodando no navegador.
-    """
     now = datetime.datetime.now().strftime("%H:%M:%S")
-    # Códigos ANSI para cores
-    RESET = "\033[0m"
-    BOLD = "\033[1m"
-    GREEN = "\033[92m"
-    YELLOW = "\033[93m"
-    RED = "\033[91m"
-    CYAN = "\033[96m"
-    WHITE = "\033[97m"
-    
-    prefix = f"{BOLD}[{now}]{RESET}"
-    if tipo == "INFO": print(f"{prefix} {CYAN}ℹ️  {msg}{RESET}")
-    elif tipo == "SUCCESS": print(f"{prefix} {GREEN}✅ {msg}{RESET}")
-    elif tipo == "WARN": print(f"{prefix} {YELLOW}⚠️  {msg}{RESET}")
-    elif tipo == "ERROR": print(f"{prefix} {RED}❌ {msg}{RESET}")
-    elif tipo == "DEBUG": print(f"{prefix} {WHITE}🔧 {msg}{RESET}")
+    colors = {"INFO": "\033[96m", "SUCCESS": "\033[92m", "WARN": "\033[93m", "ERROR": "\033[91m", "DEBUG": "\033[97m"}
+    reset = "\033[0m"
+    print(f"{colors.get(tipo, '')}[{now}] {msg}{reset}")
 
-# ================= GERENCIAMENTO DE ESTADO (JSON) =================
-def carregar_historico_global():
-    # Se não tiver arquivo, começa do zero
-    if not os.path.exists(CAMINHO_HISTORICO): return set()
+# ================= FUNÇÕES VISUAIS =================
+async def instalar_cursor_vermelho(page):
+    await page.add_init_script("""
+        const box = document.createElement('div');
+        box.classList.add('mouse-helper');
+        const styleElement = document.createElement('style');
+        styleElement.innerHTML = `
+            .mouse-helper {
+                pointer-events: none;
+                position: absolute;
+                top: 0;
+                left: 0;
+                width: 20px;
+                height: 20px;
+                background: rgba(255, 0, 0, 0.4);
+                border: 1px solid white;
+                border-radius: 50%;
+                margin-left: -10px;
+                margin-top: -10px;
+                transition: background .2s, border-radius .2s, border-color .2s;
+                z-index: 999999;
+            }
+        `;
+        document.head.appendChild(styleElement);
+        document.body.appendChild(box);
+        document.addEventListener('mousemove', event => {
+            box.style.left = event.pageX + 'px';
+            box.style.top = event.pageY + 'px';
+        }, true);
+    """)
+
+async def human_scroll(page):
+    try:
+        await page.mouse.move(random.randint(300, 800), random.randint(300, 600), steps=10)
+        for _ in range(random.randint(2, 4)):
+            await page.keyboard.press("PageDown")
+            await asyncio.sleep(random.uniform(1.0, 2.0))
+            await page.mouse.wheel(0, random.randint(300, 600))
+            await asyncio.sleep(random.uniform(0.5, 1.0))
+            if random.random() < 0.3:
+                await page.mouse.wheel(0, -random.randint(100, 200))
+                await asyncio.sleep(0.5)
+    except: pass
+
+async def human_mouse_move(page):
+    try:
+        width = page.viewport_size['width']
+        height = page.viewport_size['height']
+        for _ in range(random.randint(3, 5)):
+            x = random.randint(100, width - 100)
+            y = random.randint(100, height - 100)
+            await page.mouse.move(x, y, steps=random.randint(20, 50)) 
+            await asyncio.sleep(random.uniform(0.1, 0.3))
+    except: pass
+
+# ================= DADOS =================
+def carregar_historico_completo():
+    if not os.path.exists(CAMINHO_HISTORICO): return []
     try:
         with open(CAMINHO_HISTORICO, "r", encoding="utf-8") as f:
             dados = json.load(f)
-            # Garante que retorna um set pra busca ser O(1)
-            if isinstance(dados, list): return {l.rstrip("/") for l in dados}
-            return set()
-    except: return set()
+            lista_final = []
+            for item in dados:
+                if isinstance(item, str): 
+                    lista_final.append({"titulo": "Vaga Antiga", "link": item, "score": 0, "status": "Pendente"})
+                elif isinstance(item, dict):
+                    lista_final.append(item)
+            return lista_final
+    except: return []
 
-def salvar_historico_global(historico: set):
-    # Cria a pasta data se o usuário deletou sem querer
+def salvar_historico_completo(lista_vagas):
     os.makedirs(os.path.dirname(CAMINHO_HISTORICO), exist_ok=True)
     with open(CAMINHO_HISTORICO, "w", encoding="utf-8") as f:
-        # Salva ordenado pra ficar fácil de ler se abrir no bloco de notas
-        json.dump(sorted(list(historico)), f, indent=2)
+        seen = set()
+        unique = []
+        for d in lista_vagas:
+            if d['link'] not in seen:
+                seen.add(d['link'])
+                unique.append(d)
+        json.dump(unique, f, indent=2)
 
-# ================= LÓGICA DE SCORE =================
+def carregar_historico_global():
+    return {v['link'] for v in carregar_historico_completo()}
+
 def calcular_score_detalhado(titulo):
-    """
-    Aqui a gente define se a vaga é 'Quente' ou 'Fria'.
-    Retorna a nota (0-100) e o motivo pra exibir na UI.
-    """
-    score = 50 # Começa neutro
-    detalhes = []
-    titulo_lower = titulo.lower()
-    
-    # Bonificação
-    for word in KEYWORDS_POSITIVAS:
-        if word in titulo_lower: 
-            score += 15
-            detalhes.append(f"{word}")
-            
-    # Penalização
-    for word in KEYWORDS_NEGATIVAS:
-        if word in titulo_lower: 
-            score -= 20
-            detalhes.append(f"-{word}")
-            
-    # Trava entre 0 e 100 pra não quebrar o CSS depois
-    final_score = max(0, min(100, score))
-    motivo_str = ", ".join(detalhes) if detalhes else "Base(50)"
-    return final_score, motivo_str
+    score, detalhes = 50, []
+    t = titulo.lower()
+    for w in KEYWORDS_POSITIVAS: 
+        if w in t: score += 15; detalhes.append(w)
+    for w in KEYWORDS_NEGATIVAS: 
+        if w in t: score -= 20; detalhes.append(f"-{w}")
+    return max(0, min(100, score)), ", ".join(detalhes) if detalhes else "Base(50)"
 
-def normalizar_link(href: str):
-    # Limpa aquelas URLs sujas do LinkedIn cheias de tracking params
-    if not href: return None
-    match = JOB_ID_RE.search(href)
-    if not match: return None
-    return f"https://www.linkedin.com/jobs/view/{match.group(1)}"
+def normalizar_link(href):
+    m = JOB_ID_RE.search(href or "")
+    return f"https://www.linkedin.com/jobs/view/{m.group(1)}" if m else None
 
-# ================= CORE DO ROBÔ (ASYNC) =================
-async def _buscar_vagas_async(historico, termo_usuario, filtro_tempo, max_paginas, salvar_historico, queue, ordenar_por_data=False):
-    context = None # Inicializa vazio pra evitar erro no finally
+# ================= CORE BUSCADOR =================
+async def _buscar_vagas_async(historico_links, termo_usuario, filtro_tempo, max_paginas, salvar_historico, queue, ordenar_por_data=False):
+    context = None
     try:
+        # Se o usuário não usar title:, injetamos um filtro básico
         query = termo_usuario or "Desenvolvedor Junior"
-        # O pulo do gato: já filtra Senior na query pro LinkedIn nem trazer lixo
-        q = urllib.parse.quote(f"{query} NOT (Senior OR Pleno OR Lead)")
+        q = urllib.parse.quote(query) if "title:" in query else urllib.parse.quote(f"{query} NOT (Senior OR Pleno)")
         
-        log_terminal(f"=== INICIANDO HUNTER PRO (MODO HUMANIZADO) ===", "INFO")
+        log_terminal(f"=== INICIANDO HUNTER PRO (FILTRO AVANÇADO ATIVO) ===", "INFO")
         
         paginas_sem_novidade = 0
-        novos_links_sessao = set()
+        novos_links_sessao = []
 
         async with async_playwright() as p:
             log_terminal("Abrindo navegador...", "INFO")
-            # Usa contexto persistente pra manter cookies e sessão logada (menos chance de captcha)
             context = await p.chromium.launch_persistent_context(
                 user_data_dir=USER_DATA_DIR, headless=False, channel="chrome",
-                args=["--start-maximized", "--disable-blink-features=AutomationControlled"], viewport=None
+                args=["--start-maximized", "--disable-blink-features=AutomationControlled"]
             )
             
-            # Reutiliza a aba aberta se tiver, senão cria nova
             if len(context.pages) > 0: page = context.pages[0]
             else: page = await context.new_page()
 
+            await instalar_cursor_vermelho(page)
+
             for pagina in range(max_paginas):
-                # Se o usuário clicou em Parar no App, isso aqui levanta exceção e mata o loop
                 if asyncio.current_task().cancelled(): raise asyncio.CancelledError()
 
-                # --- ESTRATÉGIA ANTI-BAN (HUMANIZAÇÃO) ---
-                # Robô não clica na pág 2 em 0.1ms. A gente espera um pouco.
                 if pagina > 0:
-                    pausa = random.uniform(2.1, 4.5)
-                    log_terminal(f"Lendo página {pagina}... (Pausa humana de {pausa:.1f}s)", "DEBUG")
+                    pausa = random.uniform(3.5, 6.5)
+                    log_terminal(f"Trocando página... (Aguardando {pausa:.1f}s)", "DEBUG")
                     await asyncio.sleep(pausa)
 
                 offset = pagina * RESULTADOS_POR_PAGINA
                 base_url = f"https://www.linkedin.com/jobs/search?keywords={q}&location=Brazil&geoId=106057199&f_AL=true&f_TPR={filtro_tempo}&start={offset}"
-                
-                # Se o usuário quer novidade, força ordenação por DATA (fura o algoritmo de relevância)
                 if ordenar_por_data: base_url += "&sortBy=DD"
                 
                 log_terminal(f"--- Processando PÁGINA {pagina + 1} ---", "INFO")
-                # Manda aviso pra UI
                 await queue.put(([], f"🔄 Lendo página {pagina + 1}..."))
                 
                 try:
-                    await page.goto(base_url, timeout=30000)
-                    
-                    # --- SCROLL IMPERFEITO (HUMANIZAÇÃO PT. 2) ---
-                    # Nada de rolar fixo. Varia a quantidade e o tempo pra parecer uma pessoa lendo.
-                    steps = random.randint(3, 5)
-                    for _ in range(steps): 
-                        scroll_amount = random.randint(700, 1200)
-                        await page.mouse.wheel(0, scroll_amount)
-                        await asyncio.sleep(random.uniform(0.5, 1.2))
-                        
+                    await page.goto(base_url, timeout=30000, wait_until='domcontentloaded')
+                    await human_mouse_move(page) 
+                    await human_scroll(page)
                 except Exception as e:
-                    log_terminal(f"Erro navegação: {e}", "ERROR")
                     await queue.put(([], f"⚠️ Erro navegação: {e}"))
                     continue
 
-                # Seleciona todas as vagas visíveis
-                links_el = await page.locator("a[href*='/jobs/view/']").all()
-                total_encontrados = len(links_el)
-                log_terminal(f"Links na página: {total_encontrados}", "DEBUG")
+                try: await page.wait_for_selector("a[href*='/jobs/view/']", timeout=5000)
+                except: pass
 
-                # Se achou pouco link, provavelmente o LinkedIn bloqueou ou acabou a lista
-                if total_encontrados < 2:
-                    log_terminal("Fim da lista detectado.", "WARN")
+                links_el = await page.locator("a[href*='/jobs/view/']").all()
+                if len(links_el) < 2:
                     await queue.put(([], f"⚠️ Fim da lista detectado."))
                     break
 
-                novas = []
-                count_sucesso = 0
+                novas_na_pagina = [] 
                 
-                # Processa cada vaga encontrada
                 for el in links_el:
                     href = await el.get_attribute("href")
                     titulo = (await el.inner_text() or "Vaga sem titulo").strip()
                     link = normalizar_link(href)
                     
                     if not link: continue
+                    if link in historico_links: continue
                     
-                    # Já vimos essa? Pula.
-                    if link in historico: continue
+                    # --- FILTRAGEM AGRESSIVA AQUI ---
+                    titulo_lower = titulo.lower()
                     
-                    # Passou no filtro anti-sênior?
+                    # 1. Filtro de Sênior/Pleno (Existente)
                     if BLACKLIST_RE.search(f"{titulo} {link.lower()}"): continue
+                    
+                    # 2. NOVO: Filtro de Áreas Irrelevantes (Sales, Civil, etc)
+                    if any(bad_word in titulo_lower for bad_word in BLACKLIST_TITULOS_IRRELEVANTES):
+                        # log_terminal(f"Ignorado (Irrelevante): {titulo}", "DEBUG")
+                        continue
 
                     score, motivo = calcular_score_detalhado(titulo)
+                    
+                    vaga_obj = {
+                        "titulo": titulo, 
+                        "link": link, 
+                        "score": score, 
+                        "motivo": motivo,
+                        "status": "Pendente",
+                        "data_encontro": datetime.datetime.now().strftime("%d/%m/%Y")
+                    }
 
-                    historico.add(link)
-                    novos_links_sessao.add(link)
-                    novas.append({"titulo": titulo, "link": link, "score": score, "motivo": motivo})
-                    count_sucesso += 1
+                    historico_links.add(link)
+                    novos_links_sessao.append(vaga_obj)
+                    novas_na_pagina.append(vaga_obj)
 
-                log_terminal(f"Resumo Pág {pagina+1}: {count_sucesso} Novas", "SUCCESS" if count_sucesso else "INFO")
-
-                if novas:
-                    # Ordena as da página atual antes de mandar
-                    novas.sort(key=lambda x: x['score'], reverse=True)
-                    await queue.put((novas, f"✅ Pág {pagina+1}: +{len(novas)} vagas"))
+                if novas_na_pagina:
+                    novas_na_pagina.sort(key=lambda x: x['score'], reverse=True)
+                    await queue.put((novas_na_pagina, f"✅ Pág {pagina+1}: +{len(novas_na_pagina)} vagas"))
                     paginas_sem_novidade = 0
                 else:
                     await queue.put(([], f"⚪ Pág {pagina+1}: Sem novidades"))
                     paginas_sem_novidade += 1
 
-                # Proteção pra não ficar rodando infinito se não tiver nada novo
                 if paginas_sem_novidade >= MAX_PAGINAS_SEM_NOVIDADE:
-                    log_terminal("Parando busca (Sem novidades).", "WARN")
                     await queue.put(([], f"✋ Parando (Sem novidades)."))
                     break
             
-        # Salva tudo no final se o usuário deixou
         if salvar_historico and novos_links_sessao:
-            salvar_historico_global(historico)
-            log_terminal(f"Banco de dados atualizado (+{len(novos_links_sessao)} vagas).", "SUCCESS")
+            todos_dados = carregar_historico_completo()
+            todos_dados.extend(novos_links_sessao)
+            salvar_historico_completo(todos_dados)
+            log_terminal(f"Salvo +{len(novos_links_sessao)} vagas no disco.", "SUCCESS")
             await queue.put(([], "💾 Salvo no disco."))
 
-    except asyncio.CancelledError:
-        log_terminal("Tarefa cancelada pelo usuário!", "WARN")
+    except asyncio.CancelledError: log_terminal("Tarefa cancelada!", "WARN")
     except Exception as e:
         log_terminal(f"Erro Crítico: {str(e)}", "ERROR")
         await queue.put(([], f"❌ Erro: {str(e)}"))
     finally:
-        # BLINDAGEM: Garante que o navegador fecha de qualquer jeito
         if context:
             try: await context.close()
             except: pass
-        # Manda sinal de fim pra UI não ficar travada
         await queue.put(None)
 
-# ================= PONTE SYNC -> ASYNC (BLINDADA PARA WINDOWS) =================
 def buscar_vagas_em_lote(links_ja_vistos, termo, tempo, salvar, max_pg=10, ordenar_por_data=False):
-    """
-    Essa função é o wrapper pro Streamlit (que é síncrono) conseguir
-    conversar com o Playwright (que é assíncrono).
-    """
     historico = carregar_historico_global()
     historico.update(links_ja_vistos)
-    
     queue = asyncio.Queue()
-    
-    # Criação segura do loop
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
-    # Dispara o robô em background
+    try: loop = asyncio.get_event_loop()
+    except RuntimeError: loop = asyncio.new_event_loop(); asyncio.set_event_loop(loop)
     task = loop.create_task(_buscar_vagas_async(historico, termo, tempo, max_pg, salvar, queue, ordenar_por_data))
-
     try:
         while True:
-            # Fica ouvindo a fila. O run_until_complete faz a ponte sync.
-            # Adicionamos um timeout pequeno para permitir que o CTRL+C ou Stop do Streamlit sejam processados
             try:
-                # Espera por dados na fila
                 dados = loop.run_until_complete(queue.get())
                 if dados is None: break
                 yield dados
-            except RuntimeError:
-                # Se o loop fechar inesperadamente
-                break
-
+            except RuntimeError: break
     except GeneratorExit:
-        # Se o usuário clicar em PARAR no app.py, o loop quebra e cai aqui.
-        log_terminal("Interrompendo tarefa assíncrona...", "WARN")
+        log_terminal("Interrompendo...", "WARN")
         task.cancel()
-        
-        # --- BLINDAGEM CONTRA WINERROR 87 ---
-        try:
-            # Tenta esperar o cancelamento finalizar
-            # Suppress=True impede que erros de cancelamento subam
-            loop.run_until_complete(task)
-        except (asyncio.CancelledError, OSError, RuntimeError, Exception):
-            # No Windows com ProactorEventLoop, é comum dar erro ao fechar pipes
-            # de processos que já morreram. Podemos ignorar isso com segurança.
-            pass
-            
-        # Relança a exceção para o Python saber que o generator acabou corretamente
+        try: loop.run_until_complete(task)
+        except (asyncio.CancelledError, OSError, RuntimeError, Exception): pass
         raise
