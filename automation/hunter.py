@@ -14,23 +14,55 @@ CAMINHO_HISTORICO = os.path.join(os.getcwd(), "data", "historico_vagas.json")
 RESULTADOS_POR_PAGINA = 25
 MAX_PAGINAS_SEM_NOVIDADE = 2
 
-KEYWORDS_POSITIVAS = ["python", "django", "flask", "fastapi", "pandas", "junior", "júnior", "jr", "estagio", "estágio", "trainee", "entry level", "desenvolvedor", "developer", "software"]
+KEYWORDS_POSITIVAS = [
+    # Níveis e Vínculos
+    "python", "django", "flask", "fastapi", "pandas", "junior", "júnior", "jr", 
+    "estagio", "estágio", "trainee", "entry level", "desenvolvedor", "developer", 
+    "software", "associate", "analista", "vaga", "oportunidade", "remoto", "remote",
+    
+    # Backend e Linguagens Complementares
+    "backend", "back-end", "fullstack", "full-stack", "node", "nodejs", "javascript", 
+    "js", "typescript", "ts", "java", "spring", "c#", "dotnet", "net core", "go", "golang",
+    
+    # APIs e Integrações
+    "api", "rest", "restful", "graphql", "soap", "json", "webhooks", "microserviços", 
+    "microservices", "serverless",
+    
+    # Bancos de Dados
+    "sql", "postgresql", "postgres", "mysql", "mariadb", "sqlite", "mongodb", "nosql", 
+    "redis", "elasticsearch", "orm", "sqlalchemy", "prisma",
+    
+    # DevOps e Nuvem
+    "docker", "docker-compose", "kubernetes", "k8s", "aws", "amazon web services", 
+    "azure", "gcp", "google cloud", "cloud", "devops", "ci/cd", "jenkins", 
+    "github actions", "terraform", "linux", "bash", "unix",
+    
+    # Ferramentas e Versão
+    "git", "github", "gitlab", "bitbucket", "svn", "versionamento", "jira", "trello",
+    
+    # Testes e Qualidade
+    "qa", "testes", "testing", "pytest", "unittest", "tdd", "bdd", "selenium", 
+    "cypress", "clean code", "solid", "dry", "design patterns",
+    
+    # Metodologias e Soft Skills
+    "agile", "agil", "scrum", "kanban", "lean", "prazos", "documentação", 
+    "code review", "refatoração", "refactoring"]
+
 KEYWORDS_NEGATIVAS = ["senior", "pleno", "sr", "lead", "tech lead"]
 
 # --- FILTRO 1: BLACKLIST DE PALAVRAS (Busca Geral) ---
 BLACKLIST_RE = re.compile(r"(senior|sênior|sr\.?|pleno|lead|tech lead|líder|principal|staff|head|manager|gerente|gestor|coordenador|expert|architect|arquiteto|\biii\b|\biv\b|\bv\b)", re.I)
 
 # --- FILTRO 2: BLACKLIST DE CARGOS IRRELEVANTES (O Pente Fino Real) ---
-# Se o título tiver qualquer uma dessas palavras, a vaga é descartada na hora.
 BLACKLIST_TITULOS_IRRELEVANTES = [
-    "vendas", "sales", "vendedor", "consultor", "executivo", "sdr", "closer", "comercial", # Vendas
-    "civil", "elétrica", "mecânica", "produção", "química", "ambiental", # Engenharias não-software
-    "sap", "erp", "totvs", "protheus", "winthor", # Sistemas específicos não-dev
-    "suporte", "support", "help desk", "service desk", # Suporte técnico
-    "recrutador", "recruiter", "rh", "talent", "human resources", # RH
-    "marketing", "design", "designer", "social media", "conteúdo", # Mkt
-    "administrativo", "assistente", "auxiliar", "recepcionista", # Adm
-    "comprador", "banco de talentos", "banco de currículos", "vaga afirmativa" # Outros
+    "vendas", "sales", "vendedor", "consultor", "executivo", "sdr", "closer", "comercial", 
+    "civil", "elétrica", "mecânica", "produção", "química", "ambiental", 
+    "sap", "erp", "totvs", "protheus", "winthor", 
+    "suporte", "support", "help desk", "service desk", 
+    "recrutador", "recruiter", "rh", "talent", "human resources", 
+    "marketing", "design", "designer", "social media", "conteúdo", 
+    "administrativo", "assistente", "auxiliar", "recepcionista", 
+    "comprador", "banco de talentos", "banco de currículos", "vaga afirmativa"
 ]
 
 JOB_ID_RE = re.compile(r"/jobs/view/(\d+)")
@@ -41,7 +73,36 @@ def log_terminal(msg, tipo="INFO"):
     reset = "\033[0m"
     print(f"{colors.get(tipo, '')}[{now}] {msg}{reset}")
 
-# ================= FUNÇÕES VISUAIS =================
+# ================= FUNÇÕES DE CAMUFLAGEM E VISUAIS =================
+
+async def aplicar_stealth_manual(page):
+    """
+    Injeta scripts para esconder propriedades que identificam automação (WebDriver).
+    Substitui a necessidade da biblioteca externa playwright-stealth.
+    """
+    await page.add_init_script("""
+        // 1. Esconder navigator.webdriver (O mais importante)
+        Object.defineProperty(navigator, 'webdriver', {
+            get: () => undefined
+        });
+
+        // 2. Emular plugins (robôs geralmente têm lista vazia)
+        Object.defineProperty(navigator, 'plugins', {
+            get: () => [1, 2, 3, 4, 5]
+        });
+
+        // 3. Emular window.chrome
+        window.chrome = { runtime: {} };
+
+        // 4. Mascarar permissões
+        const originalQuery = window.navigator.permissions.query;
+        window.navigator.permissions.query = (parameters) => (
+            parameters.name === 'notifications' ?
+            Promise.resolve({ state: Notification.permission }) :
+            originalQuery(parameters)
+        );
+    """)
+
 async def instalar_cursor_vermelho(page):
     await page.add_init_script("""
         const box = document.createElement('div');
@@ -138,7 +199,7 @@ def normalizar_link(href):
     m = JOB_ID_RE.search(href or "")
     return f"https://www.linkedin.com/jobs/view/{m.group(1)}" if m else None
 
-# ================= CORE BUSCADOR =================
+# ================= CORE BUSCADOR (BLINDADO) =================
 async def _buscar_vagas_async(historico_links, termo_usuario, filtro_tempo, max_paginas, salvar_historico, queue, ordenar_por_data=False):
     context = None
     try:
@@ -146,28 +207,52 @@ async def _buscar_vagas_async(historico_links, termo_usuario, filtro_tempo, max_
         query = termo_usuario or "Desenvolvedor Junior"
         q = urllib.parse.quote(query) if "title:" in query else urllib.parse.quote(f"{query} NOT (Senior OR Pleno)")
         
-        log_terminal(f"=== INICIANDO HUNTER PRO (FILTRO AVANÇADO ATIVO) ===", "INFO")
+        log_terminal(f"=== INICIANDO HUNTER PRO (MODE: STEALTH MANUAL) ===", "INFO")
         
         paginas_sem_novidade = 0
         novos_links_sessao = []
 
         async with async_playwright() as p:
-            log_terminal("Abrindo navegador...", "INFO")
+            log_terminal("Abrindo navegador camuflado...", "INFO")
+            
+            # --- Argumentos de Camuflagem Pesada ---
+            args_camuflagem = [
+                "--start-maximized",
+                "--disable-blink-features=AutomationControlled",
+                "--disable-infobars",
+                "--exclude-switches=enable-automation",
+                "--disable-extensions",
+                "--password-store=basic",
+                "--use-mock-keychain",
+                "--disable-session-crashed-bubble", 
+                "--hide-scrollbars", 
+            ]
+
             context = await p.chromium.launch_persistent_context(
-                user_data_dir=USER_DATA_DIR, headless=False, channel="chrome",
-                args=["--start-maximized", "--disable-blink-features=AutomationControlled"]
+                user_data_dir=USER_DATA_DIR,
+                headless=False,
+                channel="chrome",
+                args=args_camuflagem,
+                # --- Viewport None para maximização real (EVITA DETECÇÃO) ---
+                viewport=None,
+                ignore_default_args=["--enable-automation"],
+                # User Agent forçado (Windows 10/Chrome 120) para garantir consistência
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             )
             
             if len(context.pages) > 0: page = context.pages[0]
             else: page = await context.new_page()
 
+            # --- APLICAÇÃO MANUAL DO STEALTH ---
+            await aplicar_stealth_manual(page)
+            
             await instalar_cursor_vermelho(page)
 
             for pagina in range(max_paginas):
                 if asyncio.current_task().cancelled(): raise asyncio.CancelledError()
 
                 if pagina > 0:
-                    pausa = random.uniform(3.5, 6.5)
+                    pausa = random.uniform(4.0, 8.0)
                     log_terminal(f"Trocando página... (Aguardando {pausa:.1f}s)", "DEBUG")
                     await asyncio.sleep(pausa)
 
@@ -180,6 +265,8 @@ async def _buscar_vagas_async(historico_links, termo_usuario, filtro_tempo, max_
                 
                 try:
                     await page.goto(base_url, timeout=30000, wait_until='domcontentloaded')
+                    
+                    # Movimento humano antes de processar
                     await human_mouse_move(page) 
                     await human_scroll(page)
                 except Exception as e:
@@ -190,8 +277,14 @@ async def _buscar_vagas_async(historico_links, termo_usuario, filtro_tempo, max_
                 except: pass
 
                 links_el = await page.locator("a[href*='/jobs/view/']").all()
+                
                 if len(links_el) < 2:
-                    await queue.put(([], f"⚠️ Fim da lista detectado."))
+                    # Espera extra caso o LinkedIn esteja lento
+                    await asyncio.sleep(2)
+                    links_el = await page.locator("a[href*='/jobs/view/']").all()
+
+                if len(links_el) < 2:
+                    await queue.put(([], f"⚠️ Fim da lista ou Bloqueio detectado."))
                     break
 
                 novas_na_pagina = [] 
@@ -204,15 +297,13 @@ async def _buscar_vagas_async(historico_links, termo_usuario, filtro_tempo, max_
                     if not link: continue
                     if link in historico_links: continue
                     
-                    # --- FILTRAGEM AGRESSIVA AQUI ---
                     titulo_lower = titulo.lower()
                     
-                    # 1. Filtro de Sênior/Pleno (Existente)
+                    # 1. Filtro de Sênior/Pleno
                     if BLACKLIST_RE.search(f"{titulo} {link.lower()}"): continue
                     
-                    # 2. NOVO: Filtro de Áreas Irrelevantes (Sales, Civil, etc)
+                    # 2. Filtro de Áreas Irrelevantes
                     if any(bad_word in titulo_lower for bad_word in BLACKLIST_TITULOS_IRRELEVANTES):
-                        # log_terminal(f"Ignorado (Irrelevante): {titulo}", "DEBUG")
                         continue
 
                     score, motivo = calcular_score_detalhado(titulo)
